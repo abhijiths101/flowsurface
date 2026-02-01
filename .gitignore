@@ -2,3 +2,5 @@
 /target
 /.vscode
 *.log
+.agent
+ARCHITECTURE.md
