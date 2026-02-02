@@ -186,43 +186,36 @@ where
         scale: &YScale,
     ) {
         let palette = theme.extended_palette();
-        let middle_color = palette.secondary.base.color; // Orange-ish
-        let band_color = palette.primary.strong.color; // Blue-ish
+        let middle_color = palette.secondary.base.color;
+        let band_color = palette.primary.strong.color;
         
-        // Draw Middle
-        let mut prev: Option<(f32, f32)> = None;
-         datapoints.for_each_in(range.clone(), |x, y| {
-            let sx = ctx.interval_to_x(x) - (ctx.cell_width / 2.0);
-            let sy = scale.to_y(y.middle);
-            if let Some((px, py)) = prev {
-                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy)), 
-                    Stroke::with_color(Stroke { width: 1.0, ..Stroke::default() }, middle_color));
-            }
-            prev = Some((sx, sy));
-        });
+        let middle_stroke = Stroke::with_color(Stroke { width: 1.0, ..Stroke::default() }, middle_color);
+        let band_stroke = Stroke::with_color(Stroke { width: 1.0, ..Stroke::default() }, band_color);
         
-        // Draw Upper
-        let mut prev: Option<(f32, f32)> = None;
-         datapoints.for_each_in(range.clone(), |x, y| {
-            let sx = ctx.interval_to_x(x) - (ctx.cell_width / 2.0);
-            let sy = scale.to_y(y.upper);
-            if let Some((px, py)) = prev {
-                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy)), 
-                    Stroke::with_color(Stroke { width: 1.0, ..Stroke::default() }, band_color));
-            }
-            prev = Some((sx, sy));
-        });
+        // Single pass: draw all 3 lines at once
+        let mut prev_middle: Option<(f32, f32)> = None;
+        let mut prev_upper: Option<(f32, f32)> = None;
+        let mut prev_lower: Option<(f32, f32)> = None;
         
-        // Draw Lower
-        let mut prev: Option<(f32, f32)> = None;
-         datapoints.for_each_in(range.clone(), |x, y| {
+        datapoints.for_each_in(range, |x, y| {
             let sx = ctx.interval_to_x(x) - (ctx.cell_width / 2.0);
-            let sy = scale.to_y(y.lower);
-            if let Some((px, py)) = prev {
-                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy)), 
-                    Stroke::with_color(Stroke { width: 1.0, ..Stroke::default() }, band_color));
+            let sy_middle = scale.to_y(y.middle);
+            let sy_upper = scale.to_y(y.upper);
+            let sy_lower = scale.to_y(y.lower);
+            
+            if let Some((px, py)) = prev_middle {
+                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy_middle)), middle_stroke);
             }
-            prev = Some((sx, sy));
+            if let Some((px, py)) = prev_upper {
+                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy_upper)), band_stroke);
+            }
+            if let Some((px, py)) = prev_lower {
+                frame.stroke(&Path::line(iced::Point::new(px, py), iced::Point::new(sx, sy_lower)), band_stroke);
+            }
+            
+            prev_middle = Some((sx, sy_middle));
+            prev_upper = Some((sx, sy_upper));
+            prev_lower = Some((sx, sy_lower));
         });
     }
 
