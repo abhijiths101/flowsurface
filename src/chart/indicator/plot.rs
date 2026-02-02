@@ -329,13 +329,16 @@ where
                 let rounded = round_to_tick(value, tick);
                 let snap_ratio = (rounded - highest) / (lowest - highest);
 
-                frame.stroke(
-                    &Path::line(
-                        Point::new(0.0, snap_ratio * bounds.height),
-                        Point::new(bounds.width, snap_ratio * bounds.height),
-                    ),
-                    dashed,
-                );
+                // Skip if snap_ratio is not finite (e.g., when lowest == highest)
+                if snap_ratio.is_finite() {
+                    frame.stroke(
+                        &Path::line(
+                            Point::new(0.0, snap_ratio * bounds.height),
+                            Point::new(bounds.width, snap_ratio * bounds.height),
+                        ),
+                        dashed,
+                    );
+                }
             }
         });
 
