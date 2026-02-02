@@ -25,7 +25,7 @@ struct State {
 
 pub struct MultiSplit<'a, Message> {
     panels: Vec<Element<'a, Message>>,
-    splits: &'a Vec<f32>,
+    splits: Vec<f32>,
     resize: fn(usize, f32) -> Message,
 }
 
@@ -43,7 +43,7 @@ where
 {
     pub fn new(
         panels: Vec<Element<'a, Message>>,
-        splits: &'a Vec<f32>,
+        splits: Vec<f32>,
         resize: fn(usize, f32) -> Message,
     ) -> Self {
         assert!(panels.len() >= 2, "MultiSplit needs at least 2 panels");

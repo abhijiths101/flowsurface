@@ -8,12 +8,19 @@ pub trait Indicator: PartialEq + Display + 'static {
     fn for_market(market: MarketKind) -> &'static [Self]
     where
         Self: Sized;
+
+    fn is_overlay(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Eq, Enum)]
 pub enum KlineIndicator {
     Volume,
     OpenInterest,
+    SMA,
+    EMA,
+    Bollinger,
 }
 
 impl Indicator for KlineIndicator {
@@ -23,15 +30,33 @@ impl Indicator for KlineIndicator {
             MarketKind::LinearPerps | MarketKind::InversePerps => &Self::FOR_PERPS,
         }
     }
+
+    fn is_overlay(&self) -> bool {
+        matches!(
+            self,
+            KlineIndicator::SMA | KlineIndicator::EMA | KlineIndicator::Bollinger
+        )
+    }
 }
 
 impl KlineIndicator {
     // Indicator togglers on UI menus depend on these arrays.
     // Every variant needs to be in either SPOT, PERPS or both.
     /// Indicators that can be used with spot market tickers
-    const FOR_SPOT: [KlineIndicator; 1] = [KlineIndicator::Volume];
+    const FOR_SPOT: [KlineIndicator; 4] = [
+        KlineIndicator::Volume,
+        KlineIndicator::SMA,
+        KlineIndicator::EMA,
+        KlineIndicator::Bollinger,
+    ];
     /// Indicators that can be used with perpetual swap market tickers
-    const FOR_PERPS: [KlineIndicator; 2] = [KlineIndicator::Volume, KlineIndicator::OpenInterest];
+    const FOR_PERPS: [KlineIndicator; 5] = [
+        KlineIndicator::Volume,
+        KlineIndicator::OpenInterest,
+        KlineIndicator::SMA,
+        KlineIndicator::EMA,
+        KlineIndicator::Bollinger,
+    ];
 }
 
 impl Display for KlineIndicator {
@@ -39,6 +64,9 @@ impl Display for KlineIndicator {
         match self {
             KlineIndicator::Volume => write!(f, "Volume"),
             KlineIndicator::OpenInterest => write!(f, "Open Interest"),
+            KlineIndicator::SMA => write!(f, "SMA"),
+            KlineIndicator::EMA => write!(f, "EMA"),
+            KlineIndicator::Bollinger => write!(f, "Bollinger Bands"),
         }
     }
 }

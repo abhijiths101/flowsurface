@@ -183,6 +183,7 @@ where
     pub series: S,
     pub max_for_labels: f32,
     pub min_for_labels: f32,
+    pub is_overlay: bool,
 }
 
 impl<P, S> canvas::Program<Message> for ChartCanvas<'_, P, S>
@@ -199,6 +200,9 @@ where
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if self.is_overlay {
+            return None;
+        }
         match event {
             canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let msg = matches!(*interaction, Interaction::None)
@@ -344,6 +348,9 @@ where
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if self.is_overlay {
+            return mouse::Interaction::None;
+        }
         match interaction {
             Interaction::Panning { .. } => mouse::Interaction::Grabbing,
             Interaction::Zoomin { .. } => mouse::Interaction::ZoomIn,
@@ -353,7 +360,7 @@ where
     }
 }
 
-type TooltipFn<T> = Box<dyn Fn(&T, Option<&T>) -> PlotTooltip>;
+pub type TooltipFn<T> = Box<dyn Fn(&T, Option<&T>) -> PlotTooltip>;
 
 const TOOLTIP_MARGIN: f32 = 4.0; // px from edge of canvas
 const TOOLTIP_PADDING: f32 = 8.0; // px inside tooltip box
