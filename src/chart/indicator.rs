@@ -46,6 +46,7 @@ where
         series,
         max_for_labels: max,
         min_for_labels: min,
+        is_overlay: false,
     })
     .height(Length::Fill)
     .width(Length::Fill);
@@ -64,6 +65,41 @@ where
         rule::vertical(1).style(crate::style::split_ruler),
         container(labels),
     ]
+    .into()
+}
+
+/// Creates the indicator plot WITHOUT labels/rows, reusing the main chart's Y-scale (price).
+pub fn indicator_overlay<'a, P, Y>(
+    main_chart: &'a ViewState,
+    cache: &'a Caches,
+    plot: P,
+    datapoints: &'a BTreeMap<u64, Y>,
+    _visible_range: RangeInclusive<u64>,
+) -> Element<'a, Message>
+where
+    P: Plot<AnySeries<'a, Y>> + 'a,
+{
+    let series = AnySeries::for_basis(main_chart.basis, datapoints);
+
+    // Use main chart's visible region to determine min/max
+    let visible_region = main_chart.visible_region(main_chart.bounds.size());
+    let (highest, lowest) = main_chart.price_range(&visible_region);
+
+    let min = lowest.to_f32_lossy();
+    let max = highest.to_f32_lossy();
+
+    Canvas::new(ChartCanvas::<P, AnySeries<'a, Y>> {
+        indicator_cache: &cache.main,
+        crosshair_cache: &cache.crosshair,
+        ctx: main_chart,
+        plot,
+        series,
+        max_for_labels: max,
+        min_for_labels: min,
+        is_overlay: true,
+    })
+    .height(Length::Fill)
+    .width(Length::Fill)
     .into()
 }
 

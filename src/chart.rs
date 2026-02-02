@@ -18,7 +18,7 @@ use iced::theme::palette::Extended;
 use iced::widget::canvas::{self, Cache, Canvas, Event, Frame, LineDash, Path, Stroke};
 use iced::{
     Alignment, Element, Length, Point, Rectangle, Size, Theme, Vector, keyboard, mouse, padding,
-    widget::{button, center, column, container, mouse_area, row, rule, text},
+    widget::{Stack, button, center, column, container, mouse_area, row, rule, text},
 };
 
 const ZOOM_SENSITIVITY: f32 = 30.0;
@@ -71,6 +71,10 @@ pub trait Chart: PlotConstants + canvas::Program<Message> {
     fn invalidate_crosshair(&mut self);
 
     fn view_indicators(&'_ self, enabled: &[Self::IndicatorKind]) -> Vec<Element<'_, Message>>;
+
+    fn view_overlays(&'_ self, _enabled: &[Self::IndicatorKind]) -> Vec<Element<'_, Message>> {
+        vec![]
+    }
 
     fn visible_timerange(&self) -> Option<(u64, u64)>;
 
@@ -563,30 +567,66 @@ pub fn view<'a, T: Chart>(
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let main_chart: Element<_> = row![
-            container(Canvas::new(chart).width(Length::Fill).height(Length::Fill))
-                .width(Length::FillPortion(10))
-                .height(Length::FillPortion(120)),
-            rule::vertical(1).style(style::split_ruler),
-            container(
-                mouse_area(axis_labels_y)
-                    .on_double_click(Message::DoubleClick(AxisScaleClicked::Y))
-            )
-            .width(y_labels_width)
-            .height(Length::FillPortion(120))
-        ]
-        .into();
+        let overlays = chart.view_overlays(indicators);
+
+        let main_chart_with_overlays: Element<_> = if overlays.is_empty() {
+             row![
+                container(Canvas::new(chart).width(Length::Fill).height(Length::Fill))
+                    .width(Length::FillPortion(10))
+                    .height(Length::FillPortion(120)),
+                rule::vertical(1).style(style::split_ruler),
+                container(
+                    mouse_area(axis_labels_y)
+                        .on_double_click(Message::DoubleClick(AxisScaleClicked::Y))
+                )
+                .width(y_labels_width)
+                .height(Length::FillPortion(120))
+            ].into()
+        } else {
+             let chart_canvas = Canvas::new(chart).width(Length::Fill).height(Length::Fill);
+             
+             let stacked_chart = Stack::with_children(
+                 std::iter::once(chart_canvas.into())
+                 .chain(overlays)
+             )
+             .width(Length::Fill)
+             .height(Length::Fill);
+
+             row![
+                container(stacked_chart)
+                    .width(Length::FillPortion(10))
+                    .height(Length::FillPortion(120)),
+                rule::vertical(1).style(style::split_ruler),
+                container(
+                    mouse_area(axis_labels_y)
+                        .on_double_click(Message::DoubleClick(AxisScaleClicked::Y))
+                )
+                .width(y_labels_width)
+                .height(Length::FillPortion(120))
+            ].into()
+        };
 
         let indicators = chart.view_indicators(indicators);
 
         if indicators.is_empty() {
-            main_chart
+            main_chart_with_overlays
         } else {
-            let panels = std::iter::once(main_chart)
+            let panels = std::iter::once(main_chart_with_overlays)
                 .chain(indicators)
                 .collect::<Vec<_>>();
 
-            MultiSplit::new(panels, &state.layout.splits, |index, position| {
+            let required_splits = panels.len().saturating_sub(1);
+            let mut active_splits = state.layout.splits.clone();
+
+            if active_splits.len() > required_splits {
+                active_splits.truncate(required_splits);
+            } else {
+                while active_splits.len() < required_splits {
+                    active_splits.push(0.5); // Default split ratio
+                }
+            }
+
+            MultiSplit::new(panels, active_splits, |index, position| {
                 Message::SplitDragged(index, position)
             })
             .into()

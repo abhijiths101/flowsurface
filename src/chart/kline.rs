@@ -66,6 +66,34 @@ impl Chart for KlineChart {
             if !KlineIndicator::for_market(market).contains(selected_indicator) {
                 continue;
             }
+            if selected_indicator.is_overlay() {
+                continue;
+            }
+            if let Some(indi) = self.indicators[*selected_indicator].as_ref() {
+                elements.push(indi.element(chart_state, earliest..=latest));
+            }
+        }
+        elements
+    }
+
+    fn view_overlays(&'_ self, enabled: &[Self::IndicatorKind]) -> Vec<Element<'_, Message>> {
+        let chart_state = self.state();
+        let visible_region = chart_state.visible_region(chart_state.bounds.size());
+        let (earliest, latest) = chart_state.interval_range(&visible_region);
+        if earliest > latest {
+            return vec![];
+        }
+
+        let market = chart_state.ticker_info.market_type();
+        let mut elements = vec![];
+
+        for selected_indicator in enabled {
+            if !KlineIndicator::for_market(market).contains(selected_indicator) {
+                continue;
+            }
+            if !selected_indicator.is_overlay() {
+                continue;
+            }
             if let Some(indi) = self.indicators[*selected_indicator].as_ref() {
                 elements.push(indi.element(chart_state, earliest..=latest));
             }
