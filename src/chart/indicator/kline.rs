@@ -9,6 +9,7 @@ use exchange::{Kline, Timeframe, Trade};
 pub mod bollinger;
 pub mod ema;
 pub mod open_interest;
+pub mod rsi;
 pub mod sma;
 pub mod volume;
 
@@ -69,5 +70,6 @@ pub fn make_empty(which: KlineIndicator) -> Box<dyn KlineIndicatorImpl> {
         KlineIndicator::SMA => Box::new(super::kline::sma::SMAIndicator::new()),
         KlineIndicator::EMA => Box::new(super::kline::ema::EMAIndicator::new()),
         KlineIndicator::Bollinger => Box::new(super::kline::bollinger::BollingerIndicator::new()),
+        KlineIndicator::RSI => Box::new(super::kline::rsi::RSIIndicator::new()),
     }
 }

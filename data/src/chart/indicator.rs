@@ -21,6 +21,7 @@ pub enum KlineIndicator {
     SMA,
     EMA,
     Bollinger,
+    RSI,
 }
 
 impl Indicator for KlineIndicator {
@@ -43,19 +44,21 @@ impl KlineIndicator {
     // Indicator togglers on UI menus depend on these arrays.
     // Every variant needs to be in either SPOT, PERPS or both.
     /// Indicators that can be used with spot market tickers
-    const FOR_SPOT: [KlineIndicator; 4] = [
+    const FOR_SPOT: [KlineIndicator; 5] = [
         KlineIndicator::Volume,
         KlineIndicator::SMA,
         KlineIndicator::EMA,
         KlineIndicator::Bollinger,
+        KlineIndicator::RSI,
     ];
     /// Indicators that can be used with perpetual swap market tickers
-    const FOR_PERPS: [KlineIndicator; 5] = [
+    const FOR_PERPS: [KlineIndicator; 6] = [
         KlineIndicator::Volume,
         KlineIndicator::OpenInterest,
         KlineIndicator::SMA,
         KlineIndicator::EMA,
         KlineIndicator::Bollinger,
+        KlineIndicator::RSI,
     ];
 }
 
@@ -67,6 +70,7 @@ impl Display for KlineIndicator {
             KlineIndicator::SMA => write!(f, "SMA"),
             KlineIndicator::EMA => write!(f, "EMA"),
             KlineIndicator::Bollinger => write!(f, "Bollinger Bands"),
+            KlineIndicator::RSI => write!(f, "RSI"),
         }
     }
 }
