@@ -1,7 +1,7 @@
 use crate::chart::{
     Caches, Message, ViewState,
     indicator::{
-        indicator_row,
+        indicator_row_with_last,
         kline::KlineIndicatorImpl,
         plot::{
             PlotTooltip,
@@ -66,7 +66,10 @@ impl CumulativeDeltaIndicator {
             .show_points(false)
             .with_tooltip(tooltip);
 
-        indicator_row(main_chart, &self.cache, plot, &self.data, visible_range)
+        // Get last CVD value for Y-axis label
+        let last_value = self.data.values().last().copied().unwrap_or(0.0);
+
+        indicator_row_with_last(main_chart, &self.cache, plot, &self.data, visible_range, last_value)
     }
 }
 

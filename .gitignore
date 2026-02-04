@@ -4,3 +4,4 @@
 *.log
 .agent
 ARCHITECTURE.md
+profile.json.gz

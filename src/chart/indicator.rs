@@ -31,6 +31,35 @@ pub fn indicator_row<'a, P, Y>(
 where
     P: Plot<AnySeries<'a, Y>> + 'a,
 {
+    indicator_row_impl(main_chart, cache, plot, datapoints, visible_range, None)
+}
+
+/// Creates the indicator plot with last value shown on Y-axis label.
+pub fn indicator_row_with_last<'a, P, Y>(
+    main_chart: &'a ViewState,
+    cache: &'a Caches,
+    plot: P,
+    datapoints: &'a BTreeMap<u64, Y>,
+    visible_range: RangeInclusive<u64>,
+    last_value: f32,
+) -> Element<'a, Message>
+where
+    P: Plot<AnySeries<'a, Y>> + 'a,
+{
+    indicator_row_impl(main_chart, cache, plot, datapoints, visible_range, Some(last_value))
+}
+
+fn indicator_row_impl<'a, P, Y>(
+    main_chart: &'a ViewState,
+    cache: &'a Caches,
+    plot: P,
+    datapoints: &'a BTreeMap<u64, Y>,
+    visible_range: RangeInclusive<u64>,
+    last_value: Option<f32>,
+) -> Element<'a, Message>
+where
+    P: Plot<AnySeries<'a, Y>> + 'a,
+{
     let series = AnySeries::for_basis(main_chart.basis, datapoints);
 
     let (min, max) = plot
@@ -56,6 +85,7 @@ where
         max,
         min,
         chart_bounds: main_chart.bounds,
+        last_value,
     })
     .height(Length::Fill)
     .width(main_chart.y_labels_width());
@@ -67,6 +97,7 @@ where
     ]
     .into()
 }
+
 
 /// Creates the indicator plot WITHOUT labels/rows, reusing the main chart's Y-scale (price).
 pub fn indicator_overlay<'a, P, Y>(
@@ -108,6 +139,7 @@ pub struct IndicatorLabel<'a> {
     pub max: f32,
     pub min: f32,
     pub chart_bounds: Rectangle,
+    pub last_value: Option<f32>,
 }
 
 impl canvas::Program<Message> for IndicatorLabel<'_> {
@@ -147,6 +179,29 @@ impl canvas::Program<Message> for IndicatorLabel<'_> {
                 palette.background.base.text,
                 None,
             );
+
+            // Last value label (priority 2 - shown above grid labels)
+            if let Some(last_val) = self.last_value {
+                if range > 0.0 {
+                    let y_pos = bounds.height - ((last_val - lowest) / range * bounds.height);
+                    
+                    // Only show if within visible bounds
+                    if y_pos >= 0.0 && y_pos <= bounds.height {
+                        let label = LabelContent {
+                            content: abbr_large_numbers(last_val),
+                            background_color: Some(palette.secondary.strong.color),
+                            text_color: palette.secondary.strong.text,
+                            text_size: TEXT_SIZE,
+                        };
+
+                        all_labels.push(AxisLabel::Y {
+                            bounds: calc_label_rect(y_pos, 1, TEXT_SIZE, bounds),
+                            value_label: label,
+                            timer_label: None,
+                        });
+                    }
+                }
+            }
 
             let common_bounds = Rectangle {
                 x: self.chart_bounds.x,

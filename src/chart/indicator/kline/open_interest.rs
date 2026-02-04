@@ -1,7 +1,7 @@
 use crate::chart::{
     Basis, Caches, Message, ViewState,
     indicator::{
-        indicator_row,
+        indicator_row_with_last,
         kline::{FetchCtx, KlineIndicatorImpl},
         plot::{PlotTooltip, line::LinePlot},
     },
@@ -98,7 +98,10 @@ impl OpenInterestIndicator {
             .padding(0.08)
             .with_tooltip(tooltip);
 
-        indicator_row(main_chart, &self.cache, plot, &self.data, visible_range)
+        // Get last OI value for Y-axis label
+        let last_value = self.data.values().last().copied().unwrap_or(0.0);
+
+        indicator_row_with_last(main_chart, &self.cache, plot, &self.data, visible_range, last_value)
     }
 
     // helper to compute (earliest, latest) present OI keys
