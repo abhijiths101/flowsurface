@@ -1505,6 +1505,30 @@ fn draw_clusters(
                 kline,
                 palette,
             );
+
+            // Draw volume delta below candle (always visible)
+            let total_delta: f32 = footprint.trades.values().map(|g| g.delta_qty()).sum();
+            let delta_text = if total_delta >= 0.0 {
+                abbr_large_numbers(total_delta)
+            } else {
+                format!("-{}", abbr_large_numbers(total_delta.abs()))
+            };
+            let delta_color = if total_delta >= 0.0 {
+                palette.success.base.color
+            } else {
+                palette.danger.base.color
+            };
+            let y_low = price_to_y(kline.low);
+            let delta_text_size = text_size.max(8.0);
+            draw_cluster_text(
+                frame,
+                &delta_text,
+                Point::new(area.candle_center_x, y_low + cell_height),
+                delta_text_size,
+                delta_color,
+                Alignment::Center,
+                Alignment::Start,
+            );
         }
         ClusterKind::BidAsk => {
             let area = BidAskArea::new(
@@ -1617,6 +1641,30 @@ fn draw_clusters(
                 candle_width,
                 kline,
                 palette,
+            );
+
+            // Draw volume delta below candle (always visible)
+            let total_delta: f32 = footprint.trades.values().map(|g| g.delta_qty()).sum();
+            let delta_text = if total_delta >= 0.0 {
+                abbr_large_numbers(total_delta)
+            } else {
+                format!("-{}", abbr_large_numbers(total_delta.abs()))
+            };
+            let delta_color = if total_delta >= 0.0 {
+                palette.success.base.color
+            } else {
+                palette.danger.base.color
+            };
+            let y_low = price_to_y(kline.low);
+            let delta_text_size = text_size.max(8.0);
+            draw_cluster_text(
+                frame,
+                &delta_text,
+                Point::new(area.candle_center_x, y_low + cell_height),
+                delta_text_size,
+                delta_color,
+                Alignment::Center,
+                Alignment::Start,
             );
         }
     }
