@@ -7,6 +7,7 @@ use exchange::fetcher::FetchRange;
 use exchange::{Kline, Timeframe, Trade};
 
 pub mod bollinger;
+pub mod cumulative_delta;
 pub mod ema;
 pub mod open_interest;
 pub mod rsi;
@@ -71,5 +72,6 @@ pub fn make_empty(which: KlineIndicator) -> Box<dyn KlineIndicatorImpl> {
         KlineIndicator::EMA => Box::new(super::kline::ema::EMAIndicator::new()),
         KlineIndicator::Bollinger => Box::new(super::kline::bollinger::BollingerIndicator::new()),
         KlineIndicator::RSI => Box::new(super::kline::rsi::RSIIndicator::new()),
+        KlineIndicator::CumulativeDelta => Box::new(super::kline::cumulative_delta::CumulativeDeltaIndicator::new()),
     }
 }
