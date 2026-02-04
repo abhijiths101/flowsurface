@@ -16,20 +16,18 @@ use exchange::{Kline, Trade};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::time::Instant;
 
 const EMA_PERIOD: usize = 20;
+const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct EMAIndicator {
     cache: Caches,
     data: BTreeMap<u64, f32>,
-    /// We keep the previous EMA state to calculate the next one efficiently
-    /// Key: Data index or timestamp (u64) -> Value: EMA
-    /// We actually just need the *last* valid EMA to calculate the next.
-    /// But for rebuilds, we iterate.
     last_ema: Option<f32>,
     multiplier: f32,
-    /// Store closes to recalculate last point easily during live updates
     history_len: usize,
+    last_cache_clear: Instant,
 }
 
 impl EMAIndicator {
@@ -40,7 +38,21 @@ impl EMAIndicator {
             last_ema: None,
             multiplier: 2.0 / (EMA_PERIOD as f32 + 1.0),
             history_len: 0,
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     fn calculate_next_ema(&self, price: f32, prev_ema: f32) -> f32 {
@@ -132,7 +144,7 @@ impl KlineIndicatorImpl for EMAIndicator {
             }
         }
         
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
@@ -153,7 +165,7 @@ impl KlineIndicatorImpl for EMAIndicator {
                 self.data.insert(kline.time, next);
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_insert_trades(
@@ -222,7 +234,7 @@ impl KlineIndicatorImpl for EMAIndicator {
                 }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {

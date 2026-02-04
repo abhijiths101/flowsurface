@@ -16,8 +16,10 @@ use exchange::{Kline, Trade};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::time::Instant;
 
 const SMA_PERIOD: usize = 50;
+const CACHE_THROTTLE_MS: u128 = 200; // 5 updates/sec
 
 pub struct SMAIndicator {
     cache: Caches,
@@ -25,6 +27,7 @@ pub struct SMAIndicator {
     history_closes: Vec<f32>,
     rolling_sum: f64,
     last_time: Option<u64>,
+    last_cache_clear: Instant,
 }
 
 impl SMAIndicator {
@@ -35,7 +38,21 @@ impl SMAIndicator {
             history_closes: Vec::new(),
             rolling_sum: 0.0,
             last_time: None,
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     fn update_rolling(&mut self, new_val: f32, is_new: bool) -> Option<f32> {
@@ -132,7 +149,7 @@ impl KlineIndicatorImpl for SMAIndicator {
                  }
             }
         }
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
@@ -150,7 +167,7 @@ impl KlineIndicatorImpl for SMAIndicator {
                 self.data.insert(kline.time, sma);
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_insert_trades(
@@ -204,7 +221,7 @@ impl KlineIndicatorImpl for SMAIndicator {
                  }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {

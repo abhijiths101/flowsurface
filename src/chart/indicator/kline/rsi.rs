@@ -15,24 +15,22 @@ use exchange::{Kline, Trade};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::time::Instant;
 
 const RSI_PERIOD: usize = 14;
+const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct RSIIndicator {
     cache: Caches,
     data: BTreeMap<u64, f32>,
-    /// Only keep last close for change calculation
     last_close: Option<f32>,
-    /// Finalized avg gain from completed candles
     finalized_avg_gain: Option<f64>,
-    /// Finalized avg loss from completed candles
     finalized_avg_loss: Option<f64>,
-    /// Count of candles processed (for initialization)
     candle_count: usize,
-    /// Accumulator for initial SMA calculation
     init_gain_sum: f64,
     init_loss_sum: f64,
     last_time: Option<u64>,
+    last_cache_clear: Instant,
 }
 
 impl RSIIndicator {
@@ -47,7 +45,21 @@ impl RSIIndicator {
             init_gain_sum: 0.0,
             init_loss_sum: 0.0,
             last_time: None,
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     /// Process a new candle close, returns RSI if ready
@@ -194,7 +206,7 @@ impl KlineIndicatorImpl for RSIIndicator {
                 }
             }
         }
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
@@ -209,7 +221,7 @@ impl KlineIndicatorImpl for RSIIndicator {
                 self.data.insert(kline.time, rsi);
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_insert_trades(
@@ -276,7 +288,7 @@ impl KlineIndicatorImpl for RSIIndicator {
                 }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {

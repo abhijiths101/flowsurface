@@ -15,9 +15,11 @@ use exchange::{Kline, Trade};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::time::Instant;
 
 const BB_PERIOD: usize = 20;
 const BB_STD_DEV: f32 = 2.0;
+const CACHE_THROTTLE_MS: u128 = 200;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct BandValue {
@@ -35,6 +37,7 @@ pub struct BollingerIndicator {
     rolling_sum: f64,
     rolling_sum_sq: f64,
     last_time: Option<u64>,
+    last_cache_clear: Instant,
 }
 
 impl BollingerIndicator {
@@ -48,7 +51,21 @@ impl BollingerIndicator {
             rolling_sum: 0.0,
             rolling_sum_sq: 0.0,
             last_time: None,
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     fn calculate_next_ema(&self, price: f32, prev_ema: f32) -> f32 {
@@ -335,7 +352,7 @@ impl KlineIndicatorImpl for BollingerIndicator {
                  }
             }
         }
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
@@ -379,7 +396,7 @@ impl KlineIndicatorImpl for BollingerIndicator {
                  }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
     
     fn on_insert_trades(
@@ -520,7 +537,7 @@ impl KlineIndicatorImpl for BollingerIndicator {
                 }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {

@@ -16,10 +16,14 @@ use exchange::{Kline, Trade};
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
+use std::time::Instant;
+
+const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct VolumeIndicator {
     cache: Caches,
     data: BTreeMap<u64, (f32, f32)>,
+    last_cache_clear: Instant,
 }
 
 impl VolumeIndicator {
@@ -27,7 +31,21 @@ impl VolumeIndicator {
         Self {
             cache: Caches::default(),
             data: BTreeMap::new(),
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     fn indicator_elem<'a>(
@@ -93,7 +111,7 @@ impl KlineIndicatorImpl for VolumeIndicator {
                 self.data = tickseries.volume_data();
             }
         }
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
@@ -101,7 +119,7 @@ impl KlineIndicatorImpl for VolumeIndicator {
             self.data
                 .insert(kline.time, (kline.volume.0, kline.volume.1));
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_insert_trades(
@@ -120,7 +138,7 @@ impl KlineIndicatorImpl for VolumeIndicator {
                 }
             }
         }
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {

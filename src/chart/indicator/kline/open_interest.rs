@@ -13,11 +13,14 @@ use exchange::{Kline, Timeframe, Trade};
 use exchange::{adapter::Exchange, fetcher::FetchRange};
 
 use iced::widget::{center, row, text};
-use std::{collections::BTreeMap, ops::RangeInclusive};
+use std::{collections::BTreeMap, ops::RangeInclusive, time::Instant};
+
+const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct OpenInterestIndicator {
     cache: Caches,
     pub data: BTreeMap<u64, f32>,
+    last_cache_clear: Instant,
 }
 
 impl OpenInterestIndicator {
@@ -25,7 +28,21 @@ impl OpenInterestIndicator {
         Self {
             cache: Caches::default(),
             data: BTreeMap::new(),
+            last_cache_clear: Instant::now(),
         }
+    }
+
+    fn maybe_clear_caches(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            self.cache.clear_all();
+            self.last_cache_clear = now;
+        }
+    }
+
+    fn force_clear_caches(&mut self) {
+        self.cache.clear_all();
+        self.last_cache_clear = Instant::now();
     }
 
     fn indicator_elem<'a>(
@@ -149,7 +166,7 @@ impl KlineIndicatorImpl for OpenInterestIndicator {
 
     fn rebuild_from_source(&mut self, _source: &PlotData<KlineDataPoint>) {
         // OI comes from network via external fetches(trade-fetch alike)
-        self.clear_all_caches();
+        self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, _klines: &[Kline]) {}
@@ -168,6 +185,6 @@ impl KlineIndicatorImpl for OpenInterestIndicator {
 
     fn on_open_interest(&mut self, data: &[exchange::OpenInterest]) {
         self.data.extend(data.iter().map(|oi| (oi.time, oi.value)));
-        self.clear_all_caches();
+        self.maybe_clear_caches();
     }
 }
