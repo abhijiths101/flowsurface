@@ -22,8 +22,10 @@ const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct CumulativeDeltaIndicator {
     cache: Caches,
-    data: BTreeMap<u64, f32>,
-    running_sum: f64,
+    /// Stores cumulative delta at each timestamp
+    cumulative_data: BTreeMap<u64, f32>,
+    /// Stores per-candle delta (not cumulative) for recalculation
+    per_candle_delta: BTreeMap<u64, f32>,
     last_time: Option<u64>,
     last_cache_clear: Instant,
 }
@@ -32,8 +34,8 @@ impl CumulativeDeltaIndicator {
     pub fn new() -> Self {
         Self {
             cache: Caches::default(),
-            data: BTreeMap::new(),
-            running_sum: 0.0,
+            cumulative_data: BTreeMap::new(),
+            per_candle_delta: BTreeMap::new(),
             last_time: None,
             last_cache_clear: Instant::now(),
         }
@@ -52,6 +54,22 @@ impl CumulativeDeltaIndicator {
         self.last_cache_clear = Instant::now();
     }
 
+    /// Recalculate cumulative from per-candle deltas starting from a given timestamp
+    fn recalculate_cumulative_from(&mut self, from_time: u64) {
+        // Get the cumulative value just before from_time
+        let mut running_sum: f64 = self.cumulative_data
+            .range(..from_time)
+            .next_back()
+            .map(|(_, v)| *v as f64)
+            .unwrap_or(0.0);
+
+        // Recalculate from from_time onwards
+        for (time, delta) in self.per_candle_delta.range(from_time..) {
+            running_sum += *delta as f64;
+            self.cumulative_data.insert(*time, running_sum as f32);
+        }
+    }
+
     fn indicator_elem<'a>(
         &'a self,
         main_chart: &'a ViewState,
@@ -67,9 +85,9 @@ impl CumulativeDeltaIndicator {
             .with_tooltip(tooltip);
 
         // Get last CVD value for Y-axis label
-        let last_value = self.data.values().last().copied().unwrap_or(0.0);
+        let last_value = self.cumulative_data.values().last().copied().unwrap_or(0.0);
 
-        indicator_row_with_last(main_chart, &self.cache, plot, &self.data, visible_range, last_value)
+        indicator_row_with_last(main_chart, &self.cache, plot, &self.cumulative_data, visible_range, last_value)
     }
 }
 
@@ -91,25 +109,29 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
     }
 
     fn rebuild_from_source(&mut self, source: &PlotData<KlineDataPoint>) {
-        self.data.clear();
-        self.running_sum = 0.0;
+        self.cumulative_data.clear();
+        self.per_candle_delta.clear();
         self.last_time = None;
+
+        let mut running_sum: f64 = 0.0;
 
         match source {
             PlotData::TimeBased(timeseries) => {
                 for (time, dp) in &timeseries.datapoints {
-                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
-                    self.running_sum += delta;
-                    self.data.insert(*time, self.running_sum as f32);
+                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
+                    self.per_candle_delta.insert(*time, delta);
+                    running_sum += delta as f64;
+                    self.cumulative_data.insert(*time, running_sum as f32);
                     self.last_time = Some(*time);
                 }
             }
             PlotData::TickBased(tick_aggr) => {
                 for (idx, dp) in tick_aggr.datapoints.iter().enumerate() {
                     let key = idx as u64;
-                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
-                    self.running_sum += delta;
-                    self.data.insert(key, self.running_sum as f32);
+                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
+                    self.per_candle_delta.insert(key, delta);
+                    running_sum += delta as f64;
+                    self.cumulative_data.insert(key, running_sum as f32);
                     self.last_time = Some(key);
                 }
             }
@@ -118,17 +140,35 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
+        let mut earliest_update: Option<u64> = None;
+
         for kline in klines {
-            if let Some(last) = self.last_time {
-                if kline.time <= last {
-                    continue;
+            let delta = kline.volume.0 - kline.volume.1;
+            let old_delta = self.per_candle_delta.get(&kline.time).copied();
+
+            // Check if this is an update (delta changed) or new candle
+            let is_update = old_delta.map(|old| (old - delta).abs() > 0.001).unwrap_or(false);
+            let is_new = old_delta.is_none();
+
+            if is_new || is_update {
+                self.per_candle_delta.insert(kline.time, delta);
+
+                // Track earliest time that needs recalculation
+                if earliest_update.is_none() || kline.time < earliest_update.unwrap() {
+                    earliest_update = Some(kline.time);
+                }
+
+                if is_new {
+                    self.last_time = Some(kline.time);
                 }
             }
-            self.last_time = Some(kline.time);
-            let delta = (kline.volume.0 - kline.volume.1) as f64;
-            self.running_sum += delta;
-            self.data.insert(kline.time, self.running_sum as f32);
         }
+
+        // Recalculate cumulative from the earliest updated candle
+        if let Some(from_time) = earliest_update {
+            self.recalculate_cumulative_from(from_time);
+        }
+
         self.maybe_clear_caches();
     }
 
@@ -141,34 +181,21 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
         match source {
             PlotData::TimeBased(timeseries) => {
                 if let Some((time, dp)) = timeseries.datapoints.iter().last() {
-                    let is_new = match self.last_time {
-                        Some(last) => *time > last,
-                        None => true,
-                    };
-
                     if *time < self.last_time.unwrap_or(0) {
                         return;
                     }
 
-                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
+                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
+                    let is_new = !self.per_candle_delta.contains_key(time);
+
+                    self.per_candle_delta.insert(*time, delta);
 
                     if is_new {
                         self.last_time = Some(*time);
-                        self.running_sum += delta;
-                        self.data.insert(*time, self.running_sum as f32);
-                    } else {
-                        // Update current candle: recalculate from previous sum
-                        if let Some((&prev_time, &prev_val)) = self.data.range(..*time).next_back() {
-                            let _ = prev_time; // silence unused
-                            let new_cum = prev_val as f64 + delta;
-                            self.data.insert(*time, new_cum as f32);
-                            self.running_sum = new_cum;
-                        } else {
-                            // First candle update
-                            self.data.insert(*time, delta as f32);
-                            self.running_sum = delta;
-                        }
                     }
+
+                    // Recalculate from this candle
+                    self.recalculate_cumulative_from(*time);
                 }
             }
             PlotData::TickBased(tick_aggr) => {
@@ -178,32 +205,21 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
                     let dp = &tick_aggr.datapoints[idx];
                     let key = idx as u64;
 
-                    let is_new = match self.last_time {
-                        Some(last) => key > last,
-                        None => true,
-                    };
-
                     if key < self.last_time.unwrap_or(0) {
                         return;
                     }
 
-                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
+                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
+                    let is_new = !self.per_candle_delta.contains_key(&key);
+
+                    self.per_candle_delta.insert(key, delta);
 
                     if is_new {
                         self.last_time = Some(key);
-                        self.running_sum += delta;
-                        self.data.insert(key, self.running_sum as f32);
-                    } else {
-                        // Update current candle
-                        let prev_val = if key > 0 {
-                            self.data.get(&(key - 1)).copied().unwrap_or(0.0)
-                        } else {
-                            0.0
-                        };
-                        let new_cum = prev_val as f64 + delta;
-                        self.data.insert(key, new_cum as f32);
-                        self.running_sum = new_cum;
                     }
+
+                    // Recalculate from this candle
+                    self.recalculate_cumulative_from(key);
                 }
             }
         }
