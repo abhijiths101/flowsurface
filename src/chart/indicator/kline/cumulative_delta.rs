@@ -24,10 +24,10 @@ pub struct CumulativeDeltaIndicator {
     cache: Caches,
     /// Stores cumulative delta for each timestamp
     data: BTreeMap<u64, f32>,
-    /// Tracks if we need to rebuild on next cache clear (throttled)
-    needs_rebuild: bool,
-    /// Source deltas - only rebuilt when needed
-    deltas: BTreeMap<u64, f32>,
+    /// Running cumulative sum (latest value)
+    running_sum: f64,
+    /// Last timestamp we've processed
+    last_time: Option<u64>,
     last_cache_clear: Instant,
 }
 
@@ -36,8 +36,8 @@ impl CumulativeDeltaIndicator {
         Self {
             cache: Caches::default(),
             data: BTreeMap::new(),
-            needs_rebuild: false,
-            deltas: BTreeMap::new(),
+            running_sum: 0.0,
+            last_time: None,
             last_cache_clear: Instant::now(),
         }
     }
@@ -45,34 +45,14 @@ impl CumulativeDeltaIndicator {
     fn maybe_clear_caches(&mut self) {
         let now = Instant::now();
         if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
-            // Only rebuild cumulative if needed
-            if self.needs_rebuild {
-                self.rebuild_cumulative();
-                self.needs_rebuild = false;
-            }
             self.cache.clear_all();
             self.last_cache_clear = now;
         }
     }
 
     fn force_clear_caches(&mut self) {
-        if self.needs_rebuild {
-            self.rebuild_cumulative();
-            self.needs_rebuild = false;
-        }
         self.cache.clear_all();
         self.last_cache_clear = Instant::now();
-    }
-
-    /// Rebuild cumulative data from deltas
-    fn rebuild_cumulative(&mut self) {
-        self.data.clear();
-        let mut running_sum: f64 = 0.0;
-        
-        for (time, delta) in &self.deltas {
-            running_sum += *delta as f64;
-            self.data.insert(*time, running_sum as f32);
-        }
     }
 
     fn indicator_elem<'a>(
@@ -114,36 +94,62 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
     }
 
     fn rebuild_from_source(&mut self, source: &PlotData<KlineDataPoint>) {
-        self.deltas.clear();
         self.data.clear();
+        self.running_sum = 0.0;
+        self.last_time = None;
 
         match source {
             PlotData::TimeBased(timeseries) => {
                 for (time, dp) in &timeseries.datapoints {
-                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    self.deltas.insert(*time, delta);
+                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
+                    self.running_sum += delta;
+                    self.data.insert(*time, self.running_sum as f32);
+                    self.last_time = Some(*time);
                 }
             }
             PlotData::TickBased(tick_aggr) => {
                 for (idx, dp) in tick_aggr.datapoints.iter().enumerate() {
-                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    self.deltas.insert(idx as u64, delta);
+                    let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
+                    self.running_sum += delta;
+                    self.data.insert(idx as u64, self.running_sum as f32);
+                    self.last_time = Some(idx as u64);
                 }
             }
         }
         
-        self.rebuild_cumulative();
-        self.needs_rebuild = false;
         self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
-        // Simple and fast - just update deltas, mark for rebuild
         for kline in klines {
-            let delta = kline.volume.0 - kline.volume.1;
-            self.deltas.insert(kline.time, delta);
+            let delta = (kline.volume.0 - kline.volume.1) as f64;
+            
+            // Check if updating existing candle or new candle
+            if let Some(existing) = self.data.get(&kline.time) {
+                // Update: need to adjust running_sum and recalculate this entry
+                // Get the old delta from the difference
+                let prev_cum = self.data.range(..kline.time)
+                    .next_back()
+                    .map(|(_, v)| *v as f64)
+                    .unwrap_or(0.0);
+                let old_delta = *existing as f64 - prev_cum;
+                
+                // Adjust running sum by the difference
+                let delta_change = delta - old_delta;
+                self.running_sum += delta_change;
+                
+                // Update this entry and all entries after it
+                // For simplicity in live updates, we just update this one
+                // Full recalc happens in rebuild_from_source for historical
+                self.data.insert(kline.time, (prev_cum + delta) as f32);
+            } else if self.last_time.map(|t| kline.time > t).unwrap_or(true) {
+                // New candle at the end - simple append
+                self.running_sum += delta;
+                self.data.insert(kline.time, self.running_sum as f32);
+                self.last_time = Some(kline.time);
+            }
+            // else: out of order historical data - ignored, handled by rebuild_from_source
         }
-        self.needs_rebuild = true;
         self.maybe_clear_caches();
     }
 
@@ -158,11 +164,34 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
                 // TimeBased: volume updates come through on_insert_klines
             }
             PlotData::TickBased(tick_aggr) => {
-                for (idx, dp) in tick_aggr.datapoints.iter().enumerate() {
-                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    self.deltas.insert(idx as u64, delta);
+                let count = tick_aggr.datapoints.len();
+                if count == 0 {
+                    return;
                 }
-                self.needs_rebuild = true;
+
+                let idx = count - 1;
+                let dp = &tick_aggr.datapoints[idx];
+                let key = idx as u64;
+                let delta = (dp.kline.volume.0 - dp.kline.volume.1) as f64;
+
+                if let Some(existing) = self.data.get(&key) {
+                    // Update existing tick candle
+                    let prev_cum = if key > 0 {
+                        self.data.get(&(key - 1)).copied().unwrap_or(0.0) as f64
+                    } else {
+                        0.0
+                    };
+                    let old_delta = *existing as f64 - prev_cum;
+                    let delta_change = delta - old_delta;
+                    self.running_sum += delta_change;
+                    self.data.insert(key, (prev_cum + delta) as f32);
+                } else if self.last_time.map(|t| key > t).unwrap_or(true) {
+                    // New tick candle
+                    self.running_sum += delta;
+                    self.data.insert(key, self.running_sum as f32);
+                    self.last_time = Some(key);
+                }
+                
                 self.maybe_clear_caches();
             }
         }
