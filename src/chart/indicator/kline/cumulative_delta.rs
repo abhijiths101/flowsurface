@@ -22,11 +22,12 @@ const CACHE_THROTTLE_MS: u128 = 200;
 
 pub struct CumulativeDeltaIndicator {
     cache: Caches,
-    /// Stores cumulative delta at each timestamp
-    cumulative_data: BTreeMap<u64, f32>,
-    /// Stores per-candle delta (not cumulative) for recalculation
-    per_candle_delta: BTreeMap<u64, f32>,
-    last_time: Option<u64>,
+    /// Stores cumulative delta for each timestamp
+    data: BTreeMap<u64, f32>,
+    /// Tracks if we need to rebuild on next cache clear (throttled)
+    needs_rebuild: bool,
+    /// Source deltas - only rebuilt when needed
+    deltas: BTreeMap<u64, f32>,
     last_cache_clear: Instant,
 }
 
@@ -34,9 +35,9 @@ impl CumulativeDeltaIndicator {
     pub fn new() -> Self {
         Self {
             cache: Caches::default(),
-            cumulative_data: BTreeMap::new(),
-            per_candle_delta: BTreeMap::new(),
-            last_time: None,
+            data: BTreeMap::new(),
+            needs_rebuild: false,
+            deltas: BTreeMap::new(),
             last_cache_clear: Instant::now(),
         }
     }
@@ -44,29 +45,33 @@ impl CumulativeDeltaIndicator {
     fn maybe_clear_caches(&mut self) {
         let now = Instant::now();
         if now.duration_since(self.last_cache_clear).as_millis() >= CACHE_THROTTLE_MS {
+            // Only rebuild cumulative if needed
+            if self.needs_rebuild {
+                self.rebuild_cumulative();
+                self.needs_rebuild = false;
+            }
             self.cache.clear_all();
             self.last_cache_clear = now;
         }
     }
 
     fn force_clear_caches(&mut self) {
+        if self.needs_rebuild {
+            self.rebuild_cumulative();
+            self.needs_rebuild = false;
+        }
         self.cache.clear_all();
         self.last_cache_clear = Instant::now();
     }
 
-    /// Recalculate cumulative from per-candle deltas starting from a given timestamp
-    fn recalculate_cumulative_from(&mut self, from_time: u64) {
-        // Get the cumulative value just before from_time
-        let mut running_sum: f64 = self.cumulative_data
-            .range(..from_time)
-            .next_back()
-            .map(|(_, v)| *v as f64)
-            .unwrap_or(0.0);
-
-        // Recalculate from from_time onwards
-        for (time, delta) in self.per_candle_delta.range(from_time..) {
+    /// Rebuild cumulative data from deltas
+    fn rebuild_cumulative(&mut self) {
+        self.data.clear();
+        let mut running_sum: f64 = 0.0;
+        
+        for (time, delta) in &self.deltas {
             running_sum += *delta as f64;
-            self.cumulative_data.insert(*time, running_sum as f32);
+            self.data.insert(*time, running_sum as f32);
         }
     }
 
@@ -85,9 +90,9 @@ impl CumulativeDeltaIndicator {
             .with_tooltip(tooltip);
 
         // Get last CVD value for Y-axis label
-        let last_value = self.cumulative_data.values().last().copied().unwrap_or(0.0);
+        let last_value = self.data.values().last().copied().unwrap_or(0.0);
 
-        indicator_row_with_last(main_chart, &self.cache, plot, &self.cumulative_data, visible_range, last_value)
+        indicator_row_with_last(main_chart, &self.cache, plot, &self.data, visible_range, last_value)
     }
 }
 
@@ -109,66 +114,36 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
     }
 
     fn rebuild_from_source(&mut self, source: &PlotData<KlineDataPoint>) {
-        self.cumulative_data.clear();
-        self.per_candle_delta.clear();
-        self.last_time = None;
-
-        let mut running_sum: f64 = 0.0;
+        self.deltas.clear();
+        self.data.clear();
 
         match source {
             PlotData::TimeBased(timeseries) => {
                 for (time, dp) in &timeseries.datapoints {
                     let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    self.per_candle_delta.insert(*time, delta);
-                    running_sum += delta as f64;
-                    self.cumulative_data.insert(*time, running_sum as f32);
-                    self.last_time = Some(*time);
+                    self.deltas.insert(*time, delta);
                 }
             }
             PlotData::TickBased(tick_aggr) => {
                 for (idx, dp) in tick_aggr.datapoints.iter().enumerate() {
-                    let key = idx as u64;
                     let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    self.per_candle_delta.insert(key, delta);
-                    running_sum += delta as f64;
-                    self.cumulative_data.insert(key, running_sum as f32);
-                    self.last_time = Some(key);
+                    self.deltas.insert(idx as u64, delta);
                 }
             }
         }
+        
+        self.rebuild_cumulative();
+        self.needs_rebuild = false;
         self.force_clear_caches();
     }
 
     fn on_insert_klines(&mut self, klines: &[Kline]) {
-        let mut earliest_update: Option<u64> = None;
-
+        // Simple and fast - just update deltas, mark for rebuild
         for kline in klines {
             let delta = kline.volume.0 - kline.volume.1;
-            let old_delta = self.per_candle_delta.get(&kline.time).copied();
-
-            // Check if this is an update (delta changed) or new candle
-            let is_update = old_delta.map(|old| (old - delta).abs() > 0.001).unwrap_or(false);
-            let is_new = old_delta.is_none();
-
-            if is_new || is_update {
-                self.per_candle_delta.insert(kline.time, delta);
-
-                // Track earliest time that needs recalculation
-                if earliest_update.is_none() || kline.time < earliest_update.unwrap() {
-                    earliest_update = Some(kline.time);
-                }
-
-                if is_new {
-                    self.last_time = Some(kline.time);
-                }
-            }
+            self.deltas.insert(kline.time, delta);
         }
-
-        // Recalculate cumulative from the earliest updated candle
-        if let Some(from_time) = earliest_update {
-            self.recalculate_cumulative_from(from_time);
-        }
-
+        self.needs_rebuild = true;
         self.maybe_clear_caches();
     }
 
@@ -179,51 +154,18 @@ impl KlineIndicatorImpl for CumulativeDeltaIndicator {
         source: &PlotData<KlineDataPoint>,
     ) {
         match source {
-            PlotData::TimeBased(timeseries) => {
-                if let Some((time, dp)) = timeseries.datapoints.iter().last() {
-                    if *time < self.last_time.unwrap_or(0) {
-                        return;
-                    }
-
-                    let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    let is_new = !self.per_candle_delta.contains_key(time);
-
-                    self.per_candle_delta.insert(*time, delta);
-
-                    if is_new {
-                        self.last_time = Some(*time);
-                    }
-
-                    // Recalculate from this candle
-                    self.recalculate_cumulative_from(*time);
-                }
+            PlotData::TimeBased(_) => {
+                // TimeBased: volume updates come through on_insert_klines
             }
             PlotData::TickBased(tick_aggr) => {
-                let count = tick_aggr.datapoints.len();
-                if count > 0 {
-                    let idx = count - 1;
-                    let dp = &tick_aggr.datapoints[idx];
-                    let key = idx as u64;
-
-                    if key < self.last_time.unwrap_or(0) {
-                        return;
-                    }
-
+                for (idx, dp) in tick_aggr.datapoints.iter().enumerate() {
                     let delta = dp.kline.volume.0 - dp.kline.volume.1;
-                    let is_new = !self.per_candle_delta.contains_key(&key);
-
-                    self.per_candle_delta.insert(key, delta);
-
-                    if is_new {
-                        self.last_time = Some(key);
-                    }
-
-                    // Recalculate from this candle
-                    self.recalculate_cumulative_from(key);
+                    self.deltas.insert(idx as u64, delta);
                 }
+                self.needs_rebuild = true;
+                self.maybe_clear_caches();
             }
         }
-        self.maybe_clear_caches();
     }
 
     fn on_ticksize_change(&mut self, source: &PlotData<KlineDataPoint>) {
