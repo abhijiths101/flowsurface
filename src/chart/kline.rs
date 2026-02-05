@@ -666,13 +666,31 @@ impl KlineChart {
     pub fn insert_hist_klines(&mut self, req_id: uuid::Uuid, klines_raw: &[Kline]) {
         match self.data_source {
             PlotData::TimeBased(ref mut timeseries) => {
+                // Check if this is historical data (older than existing)
+                let existing_earliest = timeseries.datapoints.keys().next().copied();
+                let new_earliest = klines_raw.iter().map(|k| k.time).min();
+                
+                let is_historical_backfill = match (existing_earliest, new_earliest) {
+                    (Some(existing), Some(new)) => new < existing,
+                    _ => false,
+                };
+
                 timeseries.insert_klines(klines_raw);
                 timeseries.insert_trades_existing_buckets(&self.raw_trades);
 
-                self.indicators
-                    .values_mut()
-                    .filter_map(Option::as_mut)
-                    .for_each(|indi| indi.on_insert_klines(klines_raw));
+                if is_historical_backfill || existing_earliest.is_none() {
+                    // Historical data inserted or first data - rebuild indicators from source
+                    self.indicators
+                        .values_mut()
+                        .filter_map(Option::as_mut)
+                        .for_each(|indi| indi.rebuild_from_source(&self.data_source));
+                } else {
+                    // Normal forward append
+                    self.indicators
+                        .values_mut()
+                        .filter_map(Option::as_mut)
+                        .for_each(|indi| indi.on_insert_klines(klines_raw));
+                }
 
                 if klines_raw.is_empty() {
                     self.request_handler
